@@ -1,1 +1,4 @@
 project_id = "pkoprioudyjqewkibuam"
+
+[functions.synthesize-speech]
+verify_jwt = true
