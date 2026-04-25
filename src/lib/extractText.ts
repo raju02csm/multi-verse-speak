@@ -1,6 +1,6 @@
 // Extract plain text from uploaded files (PDF, DOCX, TXT)
 import * as pdfjsLib from "pdfjs-dist";
-// @ts-expect-error - vite worker import
+// Vite worker import
 import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 import mammoth from "mammoth";
 
