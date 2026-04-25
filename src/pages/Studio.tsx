@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { LogOut, Play, Pause, Download, Loader2, Sparkles, Trash2, History } from "lucide-react";
+import { LogOut, Play, Pause, Loader2, Sparkles, Trash2, History, Volume2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { LANGUAGES, VOICES } from "@/lib/languages";
+import { speak, cancelSpeech, isSpeechSupported } from "@/lib/speech";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Starfield } from "@/components/Starfield";
@@ -15,7 +16,6 @@ interface Generation {
   text: string;
   language: string;
   voice: string;
-  audio_data: string | null;
   created_at: string;
 }
 
@@ -26,12 +26,10 @@ const Studio = () => {
   const [text, setText] = useState("");
   const [language, setLanguage] = useState<typeof LANGUAGES[number]["code"]>("en");
   const [voice, setVoice] = useState<typeof VOICES[number]["id"]>("Aurora");
-  const [generating, setGenerating] = useState(false);
-  const [currentAudio, setCurrentAudio] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [history, setHistory] = useState<Generation[]>([]);
   const [username, setUsername] = useState<string>("");
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [supported] = useState(() => isSpeechSupported());
 
   const langName = useMemo(
     () => LANGUAGES.find((l) => l.code === language)?.name ?? "English",
@@ -54,11 +52,15 @@ const Studio = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  useEffect(() => {
+    return () => cancelSpeech();
+  }, []);
+
   const loadHistory = async () => {
     if (!user) return;
     const { data, error } = await supabase
       .from("generations")
-      .select("id, text, language, voice, audio_data, created_at")
+      .select("id, text, language, voice, created_at")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(20);
@@ -66,78 +68,63 @@ const Studio = () => {
     setHistory(data ?? []);
   };
 
-  const handleGenerate = async () => {
+  const handleSpeak = async () => {
     if (!text.trim()) {
       toast.error("Write something to give voice to.");
       return;
     }
     if (!user) return;
-    setGenerating(true);
-    setCurrentAudio(null);
-    setPlaying(false);
-    try {
-      const { data, error } = await supabase.functions.invoke("synthesize-speech", {
-        body: { text, language: langName, voice },
-      });
-      if (error) {
-        const msg = error.message?.includes("429")
-          ? "Slow down — rate limit reached."
-          : error.message?.includes("402")
-            ? "Workspace credits exhausted. Add funds in Settings → Workspace → Usage."
-            : error.message || "Synthesis failed.";
-        toast.error(msg);
-        return;
-      }
-      const audioB64: string | undefined = data?.audio;
-      if (!audioB64) {
-        toast.error("No audio returned.");
-        return;
-      }
-      const dataUrl = `data:audio/mpeg;base64,${audioB64}`;
-      setCurrentAudio(dataUrl);
+    if (!supported) {
+      toast.error("Voice synthesis isn't supported in this browser.");
+      return;
+    }
 
-      // Save to history
-      const { error: insErr } = await supabase.from("generations").insert({
-        user_id: user.id,
-        text,
-        language: langName,
-        voice,
-        audio_data: audioB64,
-      });
-      if (insErr) console.error(insErr);
-      else loadHistory();
+    await speak({
+      text,
+      language,
+      voice,
+      onStart: () => setPlaying(true),
+      onEnd: () => setPlaying(false),
+      onError: () => {
+        setPlaying(false);
+        toast.error("Playback error.");
+      },
+    });
 
-      // Auto-play
-      setTimeout(() => audioRef.current?.play(), 50);
-      toast.success("Voice generated.");
-    } catch (e) {
-      console.error(e);
-      toast.error("Something went wrong.");
-    } finally {
-      setGenerating(false);
+    // Save to history (text only — re-synthesizes on demand)
+    const { error: insErr } = await supabase.from("generations").insert({
+      user_id: user.id,
+      text,
+      language: langName,
+      voice,
+    });
+    if (insErr) console.error(insErr);
+    else loadHistory();
+  };
+
+  const togglePlay = async () => {
+    if (playing) {
+      cancelSpeech();
+      setPlaying(false);
+    } else {
+      await handleSpeak();
     }
   };
 
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-    if (playing) audioRef.current.pause();
-    else audioRef.current.play();
-  };
-
-  const downloadCurrent = () => {
-    if (!currentAudio) return;
-    const a = document.createElement("a");
-    a.href = currentAudio;
-    a.download = `echoverse-${Date.now()}.mp3`;
-    a.click();
-  };
-
-  const playHistory = (g: Generation) => {
-    if (!g.audio_data) return;
-    const url = `data:audio/mpeg;base64,${g.audio_data}`;
-    setCurrentAudio(url);
+  const playHistory = async (g: Generation) => {
     setText(g.text);
-    setTimeout(() => audioRef.current?.play(), 50);
+    const lang = (LANGUAGES.find((l) => l.name === g.language)?.code ?? "en") as typeof LANGUAGES[number]["code"];
+    const v = (VOICES.find((vv) => vv.id === g.voice)?.id ?? "Aurora") as typeof VOICES[number]["id"];
+    setLanguage(lang);
+    setVoice(v);
+    await speak({
+      text: g.text,
+      language: lang,
+      voice: v,
+      onStart: () => setPlaying(true),
+      onEnd: () => setPlaying(false),
+      onError: () => setPlaying(false),
+    });
   };
 
   const deleteHistory = async (id: string) => {
@@ -181,6 +168,9 @@ const Studio = () => {
         <div className="mb-10 animate-fade-up">
           <p className="font-mono text-xs uppercase tracking-widest text-primary-glow">Studio</p>
           <h1 className="mt-2 font-display text-4xl sm:text-5xl">Compose your <span className="text-gradient italic">echo</span></h1>
+          {!supported && (
+            <p className="mt-3 text-sm text-destructive">Your browser doesn't support speech synthesis. Try Chrome, Edge, or Safari.</p>
+          )}
         </div>
 
         <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
@@ -251,46 +241,36 @@ const Studio = () => {
               </div>
 
               <Button
-                onClick={handleGenerate}
-                disabled={generating || !text.trim()}
+                onClick={togglePlay}
+                disabled={!supported || !text.trim()}
                 className="mt-6 w-full bg-cosmic text-primary-foreground hover:opacity-90 glow-primary"
                 size="lg"
               >
-                {generating ? (
-                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Synthesizing voice…</>
+                {playing ? (
+                  <><Pause className="mr-2 h-4 w-4" /> Stop</>
                 ) : (
-                  <><Sparkles className="mr-2 h-4 w-4" /> Generate Voice</>
+                  <><Sparkles className="mr-2 h-4 w-4" /> Speak Now</>
                 )}
               </Button>
             </div>
 
-            {/* Player */}
-            {currentAudio && (
+            {/* Now-speaking visualizer */}
+            {(playing || text.trim()) && (
               <div className="glass rounded-2xl p-6 animate-fade-in">
                 <div className="flex items-center gap-5">
                   <CosmicOrb size={88} speaking={playing} />
                   <div className="flex-1">
-                    <p className="font-mono text-xs uppercase tracking-widest text-primary-glow">{voice} · {langName}</p>
+                    <p className="font-mono text-xs uppercase tracking-widest text-primary-glow flex items-center gap-2">
+                      <Volume2 className="h-3 w-3" /> {voice} · {langName}
+                    </p>
                     <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{text}</p>
                   </div>
                   <div className="flex gap-2">
-                    <Button onClick={togglePlay} size="icon" className="bg-cosmic text-primary-foreground glow-primary">
+                    <Button onClick={togglePlay} size="icon" disabled={!supported || !text.trim()} className="bg-cosmic text-primary-foreground glow-primary">
                       {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                    </Button>
-                    <Button onClick={downloadCurrent} size="icon" variant="outline" className="glass border-primary/30">
-                      <Download className="h-4 w-4" />
                     </Button>
                   </div>
                 </div>
-                <audio
-                  ref={audioRef}
-                  src={currentAudio}
-                  onPlay={() => setPlaying(true)}
-                  onPause={() => setPlaying(false)}
-                  onEnded={() => setPlaying(false)}
-                  className="mt-4 w-full"
-                  controls
-                />
               </div>
             )}
           </div>
