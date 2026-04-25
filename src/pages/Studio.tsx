@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { LogOut, Play, Pause, Loader2, Sparkles, Trash2, History, Volume2 } from "lucide-react";
+import { LogOut, Play, Pause, Loader2, Sparkles, Trash2, History, Volume2, FileUp } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { LANGUAGES, VOICES } from "@/lib/languages";
 import { speak, cancelSpeech, isSpeechSupported } from "@/lib/speech";
+import { extractTextFromFile, ACCEPT_ATTRIBUTE } from "@/lib/extractText";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Starfield } from "@/components/Starfield";
@@ -30,6 +31,8 @@ const Studio = () => {
   const [history, setHistory] = useState<Generation[]>([]);
   const [username, setUsername] = useState<string>("");
   const [supported] = useState(() => isSpeechSupported());
+  const [extracting, setExtracting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const langName = useMemo(
     () => LANGUAGES.find((l) => l.code === language)?.name ?? "English",
@@ -136,6 +139,36 @@ const Studio = () => {
     setHistory((h) => h.filter((g) => g.id !== id));
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("File too large. Max 10MB.");
+      return;
+    }
+    setExtracting(true);
+    try {
+      const extracted = await extractTextFromFile(file);
+      if (!extracted) {
+        toast.error("No text found in this file.");
+        return;
+      }
+      const truncated = extracted.slice(0, 4000);
+      setText(truncated);
+      toast.success(
+        extracted.length > 4000
+          ? `Loaded ${file.name} (trimmed to 4000 chars)`
+          : `Loaded ${file.name}`
+      );
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Couldn't read file.");
+    } finally {
+      setExtracting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   if (loading || !user) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -229,8 +262,30 @@ const Studio = () => {
               <div>
                 <div className="mb-2 flex items-center justify-between">
                   <label className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Your text</label>
-                  <span className="font-mono text-xs text-muted-foreground">{text.length}/4000</span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={extracting}
+                      className="flex items-center gap-1.5 font-mono text-xs uppercase tracking-widest text-primary-glow transition hover:text-primary disabled:opacity-50"
+                    >
+                      {extracting ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <FileUp className="h-3 w-3" />
+                      )}
+                      {extracting ? "Reading…" : "Upload PDF/DOC"}
+                    </button>
+                    <span className="font-mono text-xs text-muted-foreground">{text.length}/4000</span>
+                  </div>
                 </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ACCEPT_ATTRIBUTE}
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
                 <Textarea
                   value={text}
                   onChange={(e) => setText(e.target.value.slice(0, 4000))}
