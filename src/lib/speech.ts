@@ -78,26 +78,131 @@ export interface SpeakOptions {
   onError?: (e: SpeechSynthesisErrorEvent) => void;
 }
 
-export const speak = async (opts: SpeakOptions): Promise<SpeechSynthesisUtterance> => {
-  const synth = window.speechSynthesis;
-  synth.cancel();
-  const voices = await loadVoices();
-  const preset = VOICE_PRESETS[opts.voice];
-  const utter = new SpeechSynthesisUtterance(opts.text);
-  utter.lang = LANG_TAG[opts.language];
-  const v = pickVoice(voices, opts.language, preset);
-  if (v) utter.voice = v;
-  utter.pitch = preset.pitch;
-  utter.rate = preset.rate;
-  utter.volume = 1;
-  if (opts.onStart) utter.onstart = opts.onStart;
-  if (opts.onEnd) utter.onend = opts.onEnd;
-  if (opts.onError) utter.onerror = opts.onError;
-  synth.speak(utter);
-  return utter;
+/** Split long text into sentence-ish chunks (browsers fail/cut off >~200 chars). */
+const chunkText = (text: string, maxLen = 180): string[] => {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) return [];
+  if (clean.length <= maxLen) return [clean];
+  const parts: string[] = [];
+  // Split on sentence boundaries first, then on commas, then hard-wrap.
+  const sentences = clean.match(/[^.!?。！？]+[.!?。！？]+|\S[^.!?。！？]*$/g) ?? [clean];
+  for (const s of sentences) {
+    const t = s.trim();
+    if (t.length <= maxLen) { parts.push(t); continue; }
+    const sub = t.split(/,\s+/);
+    let buf = "";
+    for (const piece of sub) {
+      const next = buf ? `${buf}, ${piece}` : piece;
+      if (next.length > maxLen) {
+        if (buf) parts.push(buf);
+        if (piece.length > maxLen) {
+          // Hard wrap on spaces
+          const words = piece.split(" ");
+          let cur = "";
+          for (const w of words) {
+            if ((cur + " " + w).trim().length > maxLen) {
+              if (cur) parts.push(cur.trim());
+              cur = w;
+            } else {
+              cur = cur ? cur + " " + w : w;
+            }
+          }
+          if (cur) parts.push(cur.trim());
+          buf = "";
+        } else {
+          buf = piece;
+        }
+      } else {
+        buf = next;
+      }
+    }
+    if (buf) parts.push(buf);
+  }
+  return parts.filter(Boolean);
 };
 
-export const cancelSpeech = () => window.speechSynthesis.cancel();
+let cancelled = false;
+let activeUtter: SpeechSynthesisUtterance | null = null;
+
+const waitForCancel = () =>
+  new Promise<void>((resolve) => {
+    const synth = window.speechSynthesis;
+    if (!synth.speaking && !synth.pending) return resolve();
+    let tries = 0;
+    const tick = () => {
+      tries++;
+      if (!synth.speaking && !synth.pending) return resolve();
+      if (tries > 20) return resolve();
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
+
+export const speak = async (opts: SpeakOptions): Promise<void> => {
+  const synth = window.speechSynthesis;
+  cancelled = true;
+  synth.cancel();
+  await waitForCancel();
+  cancelled = false;
+
+  const voices = await loadVoices();
+  const preset = VOICE_PRESETS[opts.voice];
+  const v = pickVoice(voices, opts.language, preset);
+  const chunks = chunkText(opts.text);
+  if (!chunks.length) return;
+
+  let started = false;
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (cancelled) return;
+    const chunk = chunks[i];
+    await new Promise<void>((resolve) => {
+      const utter = new SpeechSynthesisUtterance(chunk);
+      utter.lang = LANG_TAG[opts.language];
+      if (v) utter.voice = v;
+      utter.pitch = preset.pitch;
+      utter.rate = preset.rate;
+      utter.volume = 1;
+      activeUtter = utter;
+
+      utter.onstart = () => {
+        if (!started && opts.onStart) {
+          started = true;
+          opts.onStart();
+        }
+      };
+      utter.onend = () => {
+        activeUtter = null;
+        resolve();
+      };
+      utter.onerror = (e) => {
+        activeUtter = null;
+        // 'interrupted' and 'canceled' are normal when user stops playback.
+        if (e.error === "interrupted" || e.error === "canceled") {
+          cancelled = true;
+          return resolve();
+        }
+        if (opts.onError) opts.onError(e);
+        cancelled = true;
+        resolve();
+      };
+
+      try {
+        synth.speak(utter);
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  if (opts.onEnd) opts.onEnd();
+};
+
+export const cancelSpeech = () => {
+  cancelled = true;
+  activeUtter = null;
+  try { window.speechSynthesis.cancel(); } catch { /* noop */ }
+};
 
 export const isSpeechSupported = () =>
   typeof window !== "undefined" && "speechSynthesis" in window;
