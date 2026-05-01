@@ -4,7 +4,7 @@ import { LogOut, Play, Pause, Loader2, Sparkles, Trash2, History, Volume2, FileU
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { LANGUAGES, VOICES } from "@/lib/languages";
-import { speak, cancelSpeech, isSpeechSupported } from "@/lib/speech";
+import { speak, cancelSpeech, isSpeechSupported, getSpeechProgress } from "@/lib/speech";
 import { extractTextFromFile, ACCEPT_ATTRIBUTE } from "@/lib/extractText";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -33,6 +33,8 @@ const Studio = () => {
   const [supported] = useState(() => isSpeechSupported());
   const [extracting, setExtracting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const playingRef = useRef(false);
+  useEffect(() => { playingRef.current = playing; }, [playing]);
 
   const langName = useMemo(
     () => LANGUAGES.find((l) => l.code === language)?.name ?? "English",
@@ -103,6 +105,41 @@ const Studio = () => {
     });
     if (insErr) console.error(insErr);
     else loadHistory();
+  };
+
+  // Live-switch voice/language while speaking: restart from current position.
+  const switchVoice = async (newVoice: typeof VOICES[number]["id"]) => {
+    setVoice(newVoice);
+    if (!playingRef.current) return;
+    const { text: original, charIndex } = getSpeechProgress();
+    const remaining = (original || text).slice(Math.max(0, charIndex)).trim();
+    if (!remaining) return;
+    cancelSpeech();
+    await speak({
+      text: remaining,
+      language,
+      voice: newVoice,
+      onStart: () => setPlaying(true),
+      onEnd: () => setPlaying(false),
+      onError: () => setPlaying(false),
+    });
+  };
+
+  const switchLanguage = async (newLang: typeof LANGUAGES[number]["code"]) => {
+    setLanguage(newLang);
+    if (!playingRef.current) return;
+    const { text: original, charIndex } = getSpeechProgress();
+    const remaining = (original || text).slice(Math.max(0, charIndex)).trim();
+    if (!remaining) return;
+    cancelSpeech();
+    await speak({
+      text: remaining,
+      language: newLang,
+      voice,
+      onStart: () => setPlaying(true),
+      onEnd: () => setPlaying(false),
+      onError: () => setPlaying(false),
+    });
   };
 
   const togglePlay = async () => {
@@ -212,7 +249,7 @@ const Studio = () => {
                   {LANGUAGES.map((l) => (
                     <button
                       key={l.code}
-                      onClick={() => setLanguage(l.code)}
+                      onClick={() => switchLanguage(l.code)}
                       className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${
                         language === l.code
                           ? "border-primary bg-primary/15 text-foreground glow-primary"
@@ -232,7 +269,7 @@ const Studio = () => {
                   {VOICES.map((v) => (
                     <button
                       key={v.id}
-                      onClick={() => setVoice(v.id)}
+                      onClick={() => switchVoice(v.id)}
                       className={`group rounded-xl border p-3 text-left transition ${
                         voice === v.id
                           ? "border-primary bg-primary/10 glow-primary"
