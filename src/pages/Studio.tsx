@@ -112,7 +112,11 @@ const Studio = () => {
     setVoice(newVoice);
     if (!playingRef.current) return;
     const { text: original, charIndex } = getSpeechProgress();
-    const remaining = (original || text).slice(Math.max(0, charIndex)).trim();
+    const source = original || text;
+    // Back up to the start of the current word so we don't cut mid-word.
+    let start = Math.max(0, Math.min(charIndex, source.length));
+    while (start > 0 && !/\s/.test(source[start - 1])) start--;
+    const remaining = source.slice(start);
     if (!remaining) return;
     cancelSpeech();
     await speak({
@@ -129,7 +133,10 @@ const Studio = () => {
     setLanguage(newLang);
     if (!playingRef.current) return;
     const { text: original, charIndex } = getSpeechProgress();
-    const remaining = (original || text).slice(Math.max(0, charIndex)).trim();
+    const source = original || text;
+    let start = Math.max(0, Math.min(charIndex, source.length));
+    while (start > 0 && !/\s/.test(source[start - 1])) start--;
+    const remaining = source.slice(start);
     if (!remaining) return;
     cancelSpeech();
     await speak({
