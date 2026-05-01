@@ -271,7 +271,7 @@ const Studio = () => {
                       )}
                       {extracting ? "Reading…" : "Upload PDF/DOC"}
                     </button>
-                    <span className="font-mono text-xs text-muted-foreground">{text.length}/4000</span>
+                    <span className="font-mono text-xs text-muted-foreground">{text.length} chars</span>
                   </div>
                 </div>
                 <input
@@ -283,7 +283,7 @@ const Studio = () => {
                 />
                 <Textarea
                   value={text}
-                  onChange={(e) => setText(e.target.value.slice(0, 4000))}
+                  onChange={(e) => setText(e.target.value)}
                   placeholder={LANGUAGES.find((l) => l.code === language)?.sample}
                   rows={6}
                   className="resize-none bg-background/40 border-border/60 text-base"
