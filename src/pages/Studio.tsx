@@ -153,13 +153,8 @@ const Studio = () => {
         toast.error("No text found in this file.");
         return;
       }
-      const truncated = extracted.slice(0, 4000);
-      setText(truncated);
-      toast.success(
-        extracted.length > 4000
-          ? `Loaded ${file.name} (trimmed to 4000 chars)`
-          : `Loaded ${file.name}`
-      );
+      setText(extracted);
+      toast.success(`Loaded ${file.name}`);
     } catch (err) {
       console.error(err);
       toast.error(err instanceof Error ? err.message : "Couldn't read file.");
