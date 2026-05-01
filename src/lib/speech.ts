@@ -124,6 +124,16 @@ const chunkText = (text: string, maxLen = 180): string[] => {
 let cancelled = false;
 let activeUtter: SpeechSynthesisUtterance | null = null;
 
+// Progress tracking: which character of the ORIGINAL input text is currently being spoken.
+let currentOriginalText = "";
+let currentChunkOffset = 0; // start index of current chunk inside original text
+let currentCharInChunk = 0; // boundary index within current chunk
+
+export const getSpeechProgress = (): { text: string; charIndex: number } => ({
+  text: currentOriginalText,
+  charIndex: currentChunkOffset + currentCharInChunk,
+});
+
 const waitForCancel = () =>
   new Promise<void>((resolve) => {
     const synth = window.speechSynthesis;
@@ -152,10 +162,19 @@ export const speak = async (opts: SpeakOptions): Promise<void> => {
   if (!chunks.length) return;
 
   let started = false;
+  currentOriginalText = opts.text;
+  currentChunkOffset = 0;
+  currentCharInChunk = 0;
+  let cursor = 0;
 
   for (let i = 0; i < chunks.length; i++) {
     if (cancelled) return;
     const chunk = chunks[i];
+    // Find this chunk in the original text starting from cursor
+    const idx = opts.text.indexOf(chunk, cursor);
+    currentChunkOffset = idx >= 0 ? idx : cursor;
+    cursor = currentChunkOffset + chunk.length;
+    currentCharInChunk = 0;
     await new Promise<void>((resolve) => {
       const utter = new SpeechSynthesisUtterance(chunk);
       utter.lang = LANG_TAG[opts.language];
@@ -170,6 +189,9 @@ export const speak = async (opts: SpeakOptions): Promise<void> => {
           started = true;
           opts.onStart();
         }
+      };
+      utter.onboundary = (e) => {
+        if (typeof e.charIndex === "number") currentCharInChunk = e.charIndex;
       };
       utter.onend = () => {
         activeUtter = null;
